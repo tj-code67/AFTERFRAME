@@ -1,0 +1,294 @@
+name: Build AFTERFRAME APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Generate Android project
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/afterframe app/src/main/res/xml
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "AFTERFRAME"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+          }
+          android {
+              namespace = "com.afterframe"
+              compileSdk = 35
+              defaultConfig {
+                  applicationId = "com.afterframe"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+          dependencies {
+              implementation("androidx.core:core:1.15.0")
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:theme="@android:style/Theme.Material.NoActionBar"
+                  android:label="AFTERFRAME"
+                  android:allowBackup="false"
+                  android:supportsRtl="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="${applicationId}.provider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths"/>
+                  </provider>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/xml/file_paths.xml <<'EOF'
+          <paths xmlns:android="http://schemas.android.com/apk/res/android">
+              <files-path name="moments" path="moments/"/>
+          </paths>
+          EOF
+
+          cat > app/src/main/java/com/afterframe/MainActivity.java <<'EOF'
+          package com.afterframe;
+
+          import android.app.*;
+          import android.os.*;
+          import android.content.*;
+          import android.graphics.*;
+          import android.net.Uri;
+          import android.view.*;
+          import android.widget.*;
+          import androidx.core.content.FileProvider;
+          import java.io.*;
+          import java.text.SimpleDateFormat;
+          import java.util.*;
+          import org.json.*;
+
+          public class MainActivity extends Activity {
+              LinearLayout feed;
+              String mode = "Morning";
+              File pending;
+              android.content.SharedPreferences prefs;
+
+              final androidx.activity.result.ActivityResultLauncher<Uri> camera =
+                  registerForActivityResult(
+                      new androidx.activity.result.contract.ActivityResultContracts.TakePicture(),
+                      success -> {
+                          if (success && pending != null) {
+                              try {
+                                  JSONArray entries = new JSONArray(
+                                      prefs.getString("entries", "[]"));
+                                  JSONObject item = new JSONObject();
+                                  item.put("file", pending.getName());
+                                  item.put("mode", mode);
+                                  item.put("time", System.currentTimeMillis());
+                                  entries.put(item);
+                                  prefs.edit().putString("entries",
+                                      entries.toString()).apply();
+                                  render();
+                              } catch (Exception ignored) {}
+                          } else if (pending != null) {
+                              pending.delete();
+                          }
+                      });
+
+              int dp(float n) {
+                  return (int)(n * getResources().getDisplayMetrics().density);
+              }
+
+              TextView text(String value, int size) {
+                  TextView t = new TextView(this);
+                  t.setText(value);
+                  t.setTextSize(size);
+                  t.setTextColor(0xffeeeeee);
+                  return t;
+              }
+
+              public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  getWindow().setStatusBarColor(0xff101010);
+                  getWindow().setNavigationBarColor(0xff101010);
+                  prefs = getSharedPreferences("archive", 0);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(dp(20), dp(24), dp(20), dp(10));
+                  root.setBackgroundColor(0xff101010);
+
+                  root.addView(text("AFTERFRAME", 27));
+                  TextView sub = text("YOUR LIFE. YOUR PROGRESS. YOUR RECORD.", 10);
+                  sub.setTextColor(0xff999999);
+                  root.addView(sub);
+
+                  LinearLayout actions = new LinearLayout(this);
+                  actions.setPadding(0, dp(20), 0, dp(16));
+
+                  Button morning = new Button(this);
+                  morning.setText("＋ MORNING");
+                  morning.setOnClickListener(v -> capture("Morning"));
+
+                  Button evening = new Button(this);
+                  evening.setText("＋ EVENING");
+                  evening.setOnClickListener(v -> capture("Evening"));
+
+                  actions.addView(morning, new LinearLayout.LayoutParams(0, dp(52), 1));
+                  actions.addView(evening, new LinearLayout.LayoutParams(0, dp(52), 1));
+                  root.addView(actions);
+
+                  ScrollView scroll = new ScrollView(this);
+                  feed = new LinearLayout(this);
+                  feed.setOrientation(LinearLayout.VERTICAL);
+                  scroll.addView(feed);
+                  root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+                  setContentView(root);
+                  render();
+              }
+
+              void capture(String selected) {
+                  mode = selected;
+                  try {
+                      File dir = new File(getFilesDir(), "moments");
+                      dir.mkdirs();
+                      String name = new SimpleDateFormat(
+                          "yyyyMMdd_HHmmss", Locale.US).format(new Date())
+                          + "_" + selected.toLowerCase() + ".jpg";
+                      pending = new File(dir, name);
+                      Uri uri = FileProvider.getUriForFile(
+                          this, getPackageName() + ".provider", pending);
+                      camera.launch(uri);
+                  } catch (Exception e) {
+                      Toast.makeText(this, "Camera unavailable",
+                          Toast.LENGTH_SHORT).show();
+                  }
+              }
+
+              void render() {
+                  feed.removeAllViews();
+                  try {
+                      JSONArray entries = new JSONArray(
+                          prefs.getString("entries", "[]"));
+                      for (int i = entries.length() - 1; i >= 0; i--) {
+                          JSONObject item = entries.getJSONObject(i);
+                          File file = new File(new File(getFilesDir(), "moments"),
+                              item.getString("file"));
+                          if (!file.exists()) continue;
+
+                          LinearLayout card = new LinearLayout(this);
+                          card.setOrientation(LinearLayout.VERTICAL);
+                          card.setPadding(0, dp(10), 0, dp(22));
+
+                          TextView heading = text(item.getString("mode").toUpperCase(), 15);
+                          card.addView(heading);
+
+                          String date = new SimpleDateFormat(
+                              "dd MMM yyyy  ·  hh:mm a", Locale.getDefault())
+                              .format(new Date(item.getLong("time")));
+                          TextView stamp = text(date, 11);
+                          stamp.setTextColor(0xff999999);
+                          card.addView(stamp);
+
+                          BitmapFactory.Options options = new BitmapFactory.Options();
+                          options.inJustDecodeBounds = true;
+                          BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+                          int sample = 1;
+                          while (options.outWidth / sample > 1200) sample *= 2;
+                          options.inJustDecodeBounds = false;
+                          options.inSampleSize = sample;
+                          Bitmap bitmap = BitmapFactory.decodeFile(
+                              file.getAbsolutePath(), options);
+
+                          if (bitmap != null) {
+                              ImageView image = new ImageView(this);
+                              image.setImageBitmap(bitmap);
+                              image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                              LinearLayout.LayoutParams lp =
+                                  new LinearLayout.LayoutParams(-1, dp(300));
+                              lp.topMargin = dp(10);
+                              card.addView(image, lp);
+                          }
+                          feed.addView(card);
+                      }
+                  } catch (Exception ignored) {}
+                  if (feed.getChildCount() == 0) {
+                      TextView empty = text(
+                          "Nothing here yet.\\n\\nYour first frame is waiting.",
+                          16);
+                      empty.setPadding(0, dp(40), 0, 0);
+                      feed.addView(empty);
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AFTERFRAME-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
